@@ -29,11 +29,13 @@ class ProposalModule(nn.Module):
     self.pred_layer = None      
     # Replace "pass" statement with your code
     self.pred_layer = nn.Sequential(
-        nn.Conv2d(in_dim, hidden_dim, kernel_size=3, bias=True, padding=1),
+        nn.Conv2d(in_dim, hidden_dim, kernel_size=3, padding=1),
         nn.Dropout2d(p=drop_ratio),
         nn.LeakyReLU(),
-        nn.Conv2d(hidden_dim, 6*self.num_anchors, kernel_size=1, bias=True)
+        nn.Conv2d(hidden_dim, 6*self.num_anchors, kernel_size=1)
     )
+    torch.nn.init.xavier_normal_(self.pred_layer[0].weight, gain=nn.init.calculate_gain('leaky_relu', 0.01))
+    torch.nn.init.xavier_normal_(self.pred_layer[-1].weight)
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
@@ -175,7 +177,7 @@ class RPN(nn.Module):
     super().__init__()
 
     # READ ONLY
-    self.anchor_list = torch.tensor([[1., 1], [2, 2], [3, 3], [4, 4], [5, 5], [2, 3], [3, 2], [3, 5], [5, 3]], device=device)
+    self.anchor_list = torch.tensor([[1., 1], [2, 2], [3, 3], [4, 4], [5, 5], [2, 3], [3, 2], [3, 5], [5, 3]])
     self.feat_extractor = FeatureExtractor()
     self.prop_module = ProposalModule(1280, num_anchors=self.anchor_list.shape[0])
 
@@ -241,7 +243,7 @@ class RPN(nn.Module):
     B, _, _, _ = images.shape
     features = self.feat_extractor(images)
     grid_list = GenerateGrid(B)
-    anc_list = GenerateAnchor(self.anchor_list, grid_list)
+    anc_list = GenerateAnchor(self.anchor_list.to(device=grid_list.device), grid_list)
     anc_per_img = torch.prod(torch.tensor(anc_list.shape[1:-1]))
     iou_mat = IoU(anc_list, bboxes)
     pos_anchor_idx, negative_anc_ind, GT_conf_scores, GT_offsets, GT_class, \
@@ -313,7 +315,7 @@ class RPN(nn.Module):
         offsets = offsets.permute(0,1,3,4,2)
         
         grid_list = GenerateGrid(B)
-        anc_list = GenerateAnchor(self.anchor_list, grid_list) 
+        anc_list = GenerateAnchor(self.anchor_list.to(device=grid_list.device), grid_list) 
         proposal_list = GenerateProposal(anc_list, offsets, 'FasterRCNN') 
 
         B, A, _, H, W = conf_scores.shape
@@ -355,7 +357,15 @@ class TwoStageDetector(nn.Module):
     self.cls_layer = None
 
     # Replace "pass" statement with your code
-    pass
+    self.rpn = RPN()
+    self.cls_layer = nn.Sequential(
+        nn.Linear(in_dim, hidden_dim),
+        nn.Dropout(p=drop_ratio),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, num_classes)
+    )
+    torch.nn.init.xavier_normal_(self.cls_layer[0].weight, gain=nn.init.calculate_gain('relu'))
+    torch.nn.init.xavier_normal_(self.cls_layer[-1].weight)
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
@@ -389,7 +399,16 @@ class TwoStageDetector(nn.Module):
     #    total_loss = rpn_loss + cls_loss.                                       #
     ##############################################################################
     # Replace "pass" statement with your code
-    pass
+    self.cls_layer = self.cls_layer.train()
+    total_loss, conf_scores, proposals, features, GT_class, pos_anchor_idx, anc_per_img = self.rpn(images, bboxes, output_mode='all')
+    im_idx = torch.div(pos_anchor_idx, anc_per_img, rounding_mode='floor').unsqueeze(1)
+    proposals_ibatch = torch.cat((im_idx, proposals), dim=1)
+    aligned = torchvision.ops.roi_align(
+        features, proposals_ibatch, (self.roi_output_w, self.roi_output_h)
+    )
+    pooled = nn.functional.avg_pool2d(aligned, kernel_size=(self.roi_output_w, self.roi_output_h))
+    out = self.cls_layer(pooled.squeeze())
+    total_loss = torch.add(total_loss, nn.functional.cross_entropy(out, GT_class))
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
@@ -419,7 +438,7 @@ class TwoStageDetector(nn.Module):
       of shape (P_i,) giving the predicted category labels for each box in
       final_proposals[i].
     """
-    final_proposals, final_conf_probs, final_class = None, None, None
+    final_proposals, final_conf_probs, final_class = [], [], []
     ##############################################################################
     # TODO: Predicting the final proposal coordinates `final_proposals`,        #
     # confidence scores `final_conf_probs`, and the class index `final_class`.  #
@@ -430,7 +449,19 @@ class TwoStageDetector(nn.Module):
     # probabilities from the second-stage network to compute final_class.       #
     ##############################################################################
     # Replace "pass" statement with your code
-    pass
+    self.cls_layer = self.cls_layer.eval()
+    with torch.no_grad():
+        final_proposals, final_conf_probs, features = self.rpn.inference(images, thresh=thresh, nms_thresh=nms_thresh, mode='FasterRCNN')
+        B, _, _, _ = images.shape
+        aligned = torchvision.ops.roi_align(
+            features, final_proposals, (self.roi_output_w, self.roi_output_h)
+        )
+        pooled = nn.functional.avg_pool2d(aligned, kernel_size=(self.roi_output_w, self.roi_output_h))
+        preds = self.cls_layer(pooled.squeeze()).max(dim=1)[1]
+        start = 0
+        for prop in final_proposals:
+            final_class.append(preds[start: start + prop.shape[0]].view(-1,1))
+            start += prop.shape[0]
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
