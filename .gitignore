@@ -12,3 +12,4 @@ __pycache__/
 # Some specific paths
 A5/mAP/
 A5/VOCdevkit
+A6/MNIST_data

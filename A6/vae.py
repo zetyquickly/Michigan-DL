@@ -35,14 +35,43 @@ class VAE(nn.Module):
         # vectors; the mean and log-variance estimates will both be tensors of shape (N, Z).       #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        hidden_dim = 64
+        self.encoder = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.mu_layer = nn.Linear(hidden_dim, latent_size)
+        self.logvar_layer = nn.Linear(hidden_dim, latent_size)
+        for idx in [1, 3, 5]:
+            nn.init.xavier_normal_(self.encoder[idx].weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+#         nn.init.xavier_normal_(self.mu_layer.weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+#         nn.init.xavier_normal_(self.logvar_layer.weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
         ############################################################################################
         # TODO: Implement the fully-connected decoder architecture described in the notebook.      #
         # Specifically, self.decoder should be a network that inputs a batch of latent vectors of  #
         # shape (N, Z) and outputs a tensor of estimated images of shape (N, 1, H, W).             #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        H, W = int(np.sqrt(input_size)), int(np.sqrt(input_size))
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_size, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_size),
+            nn.Sigmoid(),
+            nn.Unflatten(1, (1, H, W)),
+        )
+        for idx in [0, 2, 4]:
+            nn.init.xavier_normal_(self.decoder[idx].weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+        nn.init.xavier_normal_(self.decoder[6].weight, gain=nn.init.calculate_gain(nonlinearity="sigmoid"))
         ############################################################################################
         #                                      END OF YOUR CODE                                    #
         ############################################################################################
@@ -71,7 +100,11 @@ class VAE(nn.Module):
         # (3) Pass z through the decoder to resconstruct x                                         #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        encoded = self.encoder(x)
+        mu = self.mu_layer(encoded)
+        logvar = self.logvar_layer(encoded)
+        z = reparametrize(mu, logvar)
+        x_hat = self.decoder(z)
         ############################################################################################
         #                                      END OF YOUR CODE                                    #
         ############################################################################################
@@ -97,14 +130,43 @@ class CVAE(nn.Module):
         # to posterior mu and posterior log-variance estimates of the latent space (N, Z)          #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        hidden_dim = 192
+        С = num_classes
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size + С, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.mu_layer = nn.Linear(hidden_dim, latent_size)
+        self.logvar_layer = nn.Linear(hidden_dim, latent_size)
+        for idx in [0, 2, 4]:
+            nn.init.xavier_normal_(self.encoder[idx].weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+#         nn.init.xavier_normal_(self.mu_layer.weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+#         nn.init.xavier_normal_(self.logvar_layer.weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
 
         ############################################################################################
         # TODO: Define a fully-connected decoder as described in the notebook that transforms the  #
         # latent space (N, Z + C) to the estimated images of shape (N, 1, H, W).                   #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        H, W = int(np.sqrt(input_size)), int(np.sqrt(input_size))
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_size + С, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_size),
+            nn.Sigmoid(),
+            nn.Unflatten(1, (1, H, W)),
+        )
+        for idx in [0, 2, 4]:
+            nn.init.xavier_normal_(self.decoder[idx].weight, gain=nn.init.calculate_gain(nonlinearity="relu"))
+        nn.init.xavier_normal_(self.decoder[6].weight, gain=nn.init.calculate_gain(nonlinearity="sigmoid"))
         ############################################################################################
         #                                      END OF YOUR CODE                                    #
         ############################################################################################
@@ -134,7 +196,11 @@ class CVAE(nn.Module):
         # (3) Pass concatenation of z and one hot vectors through the decoder to resconstruct x    #
         ############################################################################################
         # Replace "pass" statement with your code
-        pass
+        encoded = self.encoder(torch.cat([torch.flatten(x, start_dim=1), c], dim=1))
+        mu = self.mu_layer(encoded)
+        logvar = self.logvar_layer(encoded)
+        z = reparametrize(mu, logvar)
+        x_hat = self.decoder(torch.cat([z, c], dim=1))
         ############################################################################################
         #                                      END OF YOUR CODE                                    #
         ############################################################################################
@@ -170,7 +236,8 @@ def reparametrize(mu, logvar):
     # posterior mu and sigma to estimate z                                                         #
     ################################################################################################
     # Replace "pass" statement with your code
-    pass
+    eps = torch.randn_like(mu)
+    z = mu + torch.sqrt(torch.exp(logvar)) * eps
     ################################################################################################
     #                              END OF YOUR CODE                                                #
     ################################################################################################
@@ -195,7 +262,9 @@ def loss_function(x_hat, x, mu, logvar):
     # TODO: Compute negative variational lowerbound loss as described in the notebook              #
     ################################################################################################
     # Replace "pass" statement with your code
-    pass
+    loss = torch.nn.functional.binary_cross_entropy(x_hat, x, reduction="sum")
+    loss += -0.5 * torch.sum(1 + logvar - mu ** 2 - torch.exp(logvar))
+    loss /= mu.shape[0]
     ################################################################################################
     #                            END OF YOUR CODE                                                  #
     ################################################################################################
